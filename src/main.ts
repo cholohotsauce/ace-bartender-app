@@ -69,20 +69,7 @@ function haptic(type: 'light' | 'medium' = 'light') {
 
 /* ===================== Spec Card Helpers ===================== */
 
-function summarizeMethod(instructions: string): string {
-  const s = instructions.toLowerCase()
 
-  if (s.includes('shake') && s.includes('top')) {
-    return 'Shake · Top with soda'
-  }
-  if (s.includes('shake')) {
-    return 'Shake'
-  }
-  if (s.includes('stir')) {
-    return 'Stir'
-  }
-  return 'Build'
-}
 
 function renderCompactIngredients(ingredients: string): string {
   return ingredients
@@ -120,7 +107,7 @@ const app = document.querySelector<HTMLDivElement>('#app')!
 app.innerHTML = `
 <header class="header">
   <div class="header-inner">
-    <img src="/assets/TheAce_BlackLogo.png" class="logo" />
+    <img src="${import.meta.env.BASE_URL}assets/TheAce_BlackLogo.png" class="logo" />
     <h1>Ace Bartender</h1>
   </div>
 </header>
@@ -165,10 +152,10 @@ const searchInput = document.querySelector<HTMLInputElement>('.search')!
 const favoritesList = document.querySelector<HTMLUListElement>('#favoritesList')!
 const recentsList = document.querySelector<HTMLUListElement>('#recentsList')!
 const resultsList = document.querySelector<HTMLUListElement>('#resultsList')!
-const favoritesSection = document.querySelector('#favoritesSection')!
-const recentsSection = document.querySelector('#recentsSection')!
-const resultsSection = document.querySelector('#resultsSection')!
-const hint = document.querySelector('#hint')!
+const favoritesSection = document.querySelector<HTMLElement>('#favoritesSection')!
+const recentsSection = document.querySelector<HTMLElement>('#recentsSection')!
+const resultsSection = document.querySelector<HTMLElement>('#resultsSection')!
+const hint = document.querySelector<HTMLElement>('#hint')!
 
 const sheet = document.querySelector<HTMLElement>('.sheet')!
 const sheetContent = document.querySelector<HTMLElement>('.sheet-content')!
