@@ -1,5 +1,6 @@
 import './style.css'
 import { cocktails, type Cocktail } from './data/cocktails'
+import { icons } from './icons'
 
 /* ===================== Storage ===================== */
 
@@ -31,7 +32,7 @@ function normalizeForSearch(input: string): string {
   return input
     .toLowerCase()
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[̀-ͯ]/g, '')
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
@@ -46,12 +47,16 @@ function escapeHTML(input: string): string {
     .replace(/'/g, '&#39;')
 }
 
-function inferPrimaryMethod(i: string): 'Shake' | 'Stir' | 'Build' {
+type Method = 'Shake' | 'Stir' | 'Build'
+
+function inferPrimaryMethod(i: string): Method {
   const s = i.toLowerCase()
   if (s.includes('shake')) return 'Shake'
   if (s.includes('stir')) return 'Stir'
   return 'Build'
 }
+
+const METHOD_ICON = { Shake: icons.shake, Stir: icons.stir, Build: icons.build } as const
 
 /**
  * Triggers a vibration pattern on supported devices (Android).
@@ -61,10 +66,7 @@ function inferPrimaryMethod(i: string): 'Shake' | 'Stir' | 'Build' {
  */
 function haptic(type: 'light' | 'medium' = 'light') {
   if (!('vibrate' in navigator)) return
-
-  // iOS Safari supports very short pulses only (actually ignores vibrate)
-  const pattern = type === 'medium' ? 20 : 10
-  navigator.vibrate(pattern)
+  navigator.vibrate(type === 'medium' ? 20 : 10)
 }
 
 /* ===================== Spirit Filters ===================== */
@@ -89,22 +91,66 @@ function spiritsOf(c: Cocktail): Spirit[] {
   ).map(s => s.label)
 }
 
-/* ===================== Spec Card Helpers ===================== */
+/* ===================== Spec Helpers ===================== */
 
+type Ingredient = { amount: string; name: string }
 
+// "1.25 oz Zubrowka" → { amount: "1.25 oz", name: "Zubrowka" }
+// "3 dashes of Angostura" → { amount: "3 dashes", name: "Angostura" }
+// "Dash of celery bitters" → { amount: "Dash", name: "celery bitters" }
+const NUMBER = String.raw`\d+(?:[./]\d+)?`
+const AMOUNT_RE = new RegExp(
+  String.raw`^(${NUMBER}(?:\s*(?:-|or|to)\s*${NUMBER})?(?:\s*(?:oz|ml|dashes|dash|drops|drop|barspoons|barspoon|bsp|tsp))?)\s+(?:of\s+)?(.+)$`,
+  'i'
+)
+const WORD_AMOUNT_RE = /^(dash|splash|full dropper|half dropper|barspoon|pinch)\s+(?:of\s+)?(.+)$/i
 
-function renderCompactIngredients(ingredients: string): string {
+function parseIngredient(raw: string): Ingredient {
+  const s = raw.trim()
+  const m = s.match(AMOUNT_RE) ?? s.match(WORD_AMOUNT_RE)
+  return m ? { amount: m[1], name: m[2] } : { amount: '', name: s }
+}
+
+function splitIngredients(ingredients: string): Ingredient[] {
   return ingredients
     .split(',')
     .map(i => i.trim())
-    .join(' · ')
+    .filter(Boolean)
+    .map(parseIngredient)
+}
+
+function splitSteps(instructions: string): string[] {
+  return instructions
+    .split(/(?<=\.)\s+/)
+    .map(s => s.trim())
+    .filter(Boolean)
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+function rowSubtitle(c: Cocktail): string {
+  const base = splitIngredients(c.ingredients)[0]?.name ?? ''
+  return `${capitalize(base)} · ${inferPrimaryMethod(c.instructions)}`
+}
+
+// Wraps the first case-insensitive match of the query in the drink name.
+function highlight(name: string, query: string): string {
+  const q = query.trim().toLowerCase()
+  const at = q ? name.toLowerCase().indexOf(q) : -1
+  if (at < 0) return escapeHTML(name)
+  return (
+    escapeHTML(name.slice(0, at)) +
+    `<mark class="mark">${escapeHTML(name.slice(at, at + q.length))}</mark>` +
+    escapeHTML(name.slice(at + q.length))
+  )
 }
 
 /* ===================== Data ===================== */
 
 const cocktailByName = new Map<string, Cocktail>(cocktails.map(c => [c.name, c]))
 const allNames = new Set(cocktails.map(c => c.name))
-
 const spiritsByName = new Map<string, Spirit[]>(cocktails.map(c => [c.name, spiritsOf(c)]))
 
 // A–Z menu, case-insensitive (so "SAZERAC" sorts with the S's)
@@ -137,58 +183,99 @@ function addRecent(name: string) {
 
 /* ===================== App Shell ===================== */
 
+type Tab = 'search' | 'favorites' | 'all'
+
+const TAB_TITLES: Record<Tab, string> = {
+  search: 'Search',
+  favorites: 'Favorites',
+  all: 'All Drinks',
+}
+
 const app = document.querySelector<HTMLDivElement>('#app')!
 app.innerHTML = `
-<header class="header">
-  <div class="header-inner">
-    <img src="${import.meta.env.BASE_URL}assets/TheAce_BlackLogo.png" class="logo" />
-    <h1>Ace Bartender</h1>
-  </div>
+<header class="navbar">
+  <div class="navbar-title"></div>
 </header>
 
 <main class="main">
-  <div class="search-wrap">
-    <input type="search" class="search" placeholder="Search cocktails or ingredients…" />
-  </div>
+  <section class="view" data-view="search">
+    <img src="${import.meta.env.BASE_URL}assets/TheAce_BlackLogo.png" class="logo" alt="The Ace" />
+    <h1 class="large-title">Search</h1>
 
-  <div class="filters" role="toolbar" aria-label="Filter by spirit">
-    <button class="filter is-active" data-spirit="">All</button>
-    ${SPIRITS.map(s => `<button class="filter" data-spirit="${s.label}">${s.label}</button>`).join('')}
-  </div>
+    <div class="search-bar">
+      <label class="search-field">
+        <span class="search-icon">${icons.search}</span>
+        <input type="search" class="search" placeholder="Cocktails or ingredients"
+          autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="go" />
+        <button type="button" class="search-clear hidden" aria-label="Clear">${icons.xmarkCircle}</button>
+      </label>
+      <button type="button" class="search-cancel">Cancel</button>
+    </div>
 
-  <section class="list-section" id="favoritesSection">
-    <div class="section-title">Favorites</div>
-    <ul class="list" id="favoritesList"></ul>
+    <section class="list-section" id="favoritesSection">
+      <div class="section-header">Favorites</div>
+      <ul class="list" id="favoritesList"></ul>
+    </section>
+
+    <section class="list-section" id="recentsSection">
+      <div class="section-header">Recently Viewed</div>
+      <ul class="list" id="recentsList"></ul>
+    </section>
+
+    <section class="list-section" id="resultsSection">
+      <div class="section-header" id="resultsHeader">Results</div>
+      <ul class="list" id="resultsList"></ul>
+    </section>
+
+    <div class="empty-state hidden" id="noResults">
+      <div class="empty-icon">${icons.search}</div>
+      <div class="empty-title">No Results</div>
+      <div class="empty-body" id="noResultsBody"></div>
+    </div>
+
+    <p class="footnote" id="hint">Try “mezcal”, “chartreuse”, or “rye”. Swipe a row right to favorite it, or press and hold for the quick spec.</p>
   </section>
 
-  <section class="list-section" id="recentsSection">
-    <div class="section-title">Recents</div>
-    <ul class="list" id="recentsList"></ul>
+  <section class="view hidden" data-view="favorites">
+    <h1 class="large-title">Favorites</h1>
+    <ul class="list" id="favoritesTabList"></ul>
+    <div class="empty-state hidden" id="noFavorites">
+      <div class="empty-icon">${icons.star}</div>
+      <div class="empty-title">No Favorites Yet</div>
+      <div class="empty-body">Tap the star on any drink to keep it here for your shift.</div>
+    </div>
   </section>
 
-  <section class="list-section" id="resultsSection">
-    <div class="section-title">Results</div>
-    <ul class="list" id="resultsList"></ul>
-  </section>
-
-  <p class="hint" id="hint">Tip: try “mezcal”, “chartreuse”, or “rye”.</p>
-
-  <section class="list-section" id="allSection">
-    <div class="section-title" id="allTitle">All Cocktails</div>
+  <section class="view hidden" data-view="all">
+    <h1 class="large-title">All Drinks</h1>
+    <div class="filters" role="toolbar" aria-label="Filter by spirit">
+      <button type="button" class="filter is-active" data-spirit="">All</button>
+      ${SPIRITS.map(s => `<button type="button" class="filter" data-spirit="${s.label}">${s.label}</button>`).join('')}
+    </div>
     <div id="allGroups"></div>
-    <p class="empty-row hidden" id="allEmpty">No cocktails match this filter.</p>
+    <div class="empty-state hidden" id="allEmpty">
+      <div class="empty-icon">${icons.glass}</div>
+      <div class="empty-title">No Drinks</div>
+      <div class="empty-body">Nothing on the menu matches this filter.</div>
+    </div>
+    <p class="footnote center" id="allCount"></p>
   </section>
-
 </main>
 
-<nav class="index-rail" aria-label="Jump to letter"></nav>
+<nav class="index-rail hidden" aria-label="Jump to letter"></nav>
+
+<nav class="tabbar">
+  <button type="button" class="tab is-active" data-tab="search">${icons.search}<span>Search</span></button>
+  <button type="button" class="tab" data-tab="favorites">${icons.starFill}<span>Favorites</span></button>
+  <button type="button" class="tab" data-tab="all">${icons.list}<span>All Drinks</span></button>
+</nav>
 
 <div class="sheet-backdrop"></div>
-<section class="sheet">
+<section class="sheet" role="dialog" aria-modal="true">
   <div class="sheet-handle"></div>
   <div class="sheet-top">
-    <button class="sheet-action sheet-action-close">Done</button>
-    <button class="sheet-action sheet-action-fav">☆</button>
+    <button type="button" class="circle-btn sheet-action-fav" aria-label="Favorite"></button>
+    <button type="button" class="circle-btn sheet-action-close" aria-label="Close">${icons.xmark}</button>
   </div>
   <div class="sheet-content"></div>
 </section>
@@ -196,39 +283,46 @@ app.innerHTML = `
 
 /* ===================== DOM ===================== */
 
-const searchInput = document.querySelector<HTMLInputElement>('.search')!
-const favoritesList = document.querySelector<HTMLUListElement>('#favoritesList')!
-const recentsList = document.querySelector<HTMLUListElement>('#recentsList')!
-const resultsList = document.querySelector<HTMLUListElement>('#resultsList')!
-const favoritesSection = document.querySelector<HTMLElement>('#favoritesSection')!
-const recentsSection = document.querySelector<HTMLElement>('#recentsSection')!
-const resultsSection = document.querySelector<HTMLElement>('#resultsSection')!
-const hint = document.querySelector<HTMLElement>('#hint')!
-const allSection = document.querySelector<HTMLElement>('#allSection')!
-const allTitle = document.querySelector<HTMLElement>('#allTitle')!
-const allGroups = document.querySelector<HTMLElement>('#allGroups')!
-const allEmpty = document.querySelector<HTMLElement>('#allEmpty')!
-const filterBar = document.querySelector<HTMLElement>('.filters')!
-const indexRail = document.querySelector<HTMLElement>('.index-rail')!
-// #app's backdrop-filter traps position:fixed children, so pin the rail to the viewport via <body>
-document.body.appendChild(indexRail)
+const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!
 
-const sheet = document.querySelector<HTMLElement>('.sheet')!
-const sheetContent = document.querySelector<HTMLElement>('.sheet-content')!
-const backdrop = document.querySelector<HTMLElement>('.sheet-backdrop')!
-const closeBtn = document.querySelector<HTMLButtonElement>('.sheet-action-close')!
-const favBtn = document.querySelector<HTMLButtonElement>('.sheet-action-fav')!
+const navbar = $<HTMLElement>('.navbar')
+const navbarTitle = $<HTMLElement>('.navbar-title')
+const searchBar = $<HTMLElement>('.search-bar')
+const searchInput = $<HTMLInputElement>('.search')
+const searchClear = $<HTMLButtonElement>('.search-clear')
+const searchCancel = $<HTMLButtonElement>('.search-cancel')
+const favoritesList = $<HTMLUListElement>('#favoritesList')
+const recentsList = $<HTMLUListElement>('#recentsList')
+const resultsList = $<HTMLUListElement>('#resultsList')
+const resultsHeader = $<HTMLElement>('#resultsHeader')
+const favoritesSection = $<HTMLElement>('#favoritesSection')
+const recentsSection = $<HTMLElement>('#recentsSection')
+const resultsSection = $<HTMLElement>('#resultsSection')
+const noResults = $<HTMLElement>('#noResults')
+const noResultsBody = $<HTMLElement>('#noResultsBody')
+const hint = $<HTMLElement>('#hint')
+const favoritesTabList = $<HTMLUListElement>('#favoritesTabList')
+const noFavorites = $<HTMLElement>('#noFavorites')
+const filterBar = $<HTMLElement>('.filters')
+const allGroups = $<HTMLElement>('#allGroups')
+const allEmpty = $<HTMLElement>('#allEmpty')
+const allCount = $<HTMLElement>('#allCount')
+const indexRail = $<HTMLElement>('.index-rail')
+
+const sheet = $<HTMLElement>('.sheet')
+const sheetContent = $<HTMLElement>('.sheet-content')
+const backdrop = $<HTMLElement>('.sheet-backdrop')
+const closeBtn = $<HTMLButtonElement>('.sheet-action-close')
+const favBtn = $<HTMLButtonElement>('.sheet-action-fav')
 
 /* ===================== State ===================== */
 
+let activeTab: Tab = 'search'
 let activeCocktail: Cocktail | null = null
 let isCompactMode = false
 let currentResults: Cocktail[] = []
 let activeSpirit: Spirit | null = null
-
-function matchesFilter(c: Cocktail) {
-  return !activeSpirit || spiritsByName.get(c.name)!.includes(activeSpirit)
-}
+let sheetOpenedAt = 0
 
 // Drag state variables for swipe-down-to-close gesture
 let dragStartY = 0
@@ -258,80 +352,104 @@ function setVisible(el: HTMLElement, show: boolean) {
   el.classList.toggle('hidden', !show)
 }
 
-function renderRow(c: Cocktail, showStar = false, showDetail = false) {
+function renderRow(c: Cocktail, query = '') {
   const li = document.createElement('li')
   li.className = 'row'
   li.dataset.name = c.name
-
-  const detail = [inferPrimaryMethod(c.instructions), c.glassware].filter(Boolean).join(' · ')
+  const isFav = favorites.includes(c.name)
 
   li.innerHTML = `
     <div class="row-text">
-      <div class="row-title">${escapeHTML(c.name)}</div>
-      ${showDetail ? `<div class="row-subtitle">${escapeHTML(detail)}</div>` : ''}
+      <div class="row-title">${highlight(c.name, query)}</div>
+      <div class="row-subtitle">${escapeHTML(rowSubtitle(c))}</div>
     </div>
     <div class="row-right">
-      ${showStar ? '<span class="row-star">★</span>' : ''}
-      <span class="row-chevron">›</span>
+      ${isFav ? `<span class="row-star">${icons.starFill}</span>` : ''}
+      <span class="row-chevron">${icons.chevron}</span>
     </div>
   `
   return li
 }
 
-function renderHome() {
-  favoritesList.innerHTML = ''
-  recentsList.innerHTML = ''
-  resultsList.innerHTML = ''
+function fillList(list: HTMLElement, items: Cocktail[], query = '') {
+  list.replaceChildren(...items.map(c => renderRow(c, query)))
+}
 
-  favorites.forEach(n => favoritesList.appendChild(renderRow(cocktailByName.get(n)!, true)))
-  recents.forEach(n => recentsList.appendChild(renderRow(cocktailByName.get(n)!)))
+function renderSearchHome() {
+  fillList(favoritesList, favorites.map(n => cocktailByName.get(n)!))
+  fillList(recentsList, recents.map(n => cocktailByName.get(n)!))
+  resultsList.replaceChildren()
 
   setVisible(favoritesSection, favorites.length > 0)
   setVisible(recentsSection, recents.length > 0)
   setVisible(resultsSection, false)
-
-  hint.classList.toggle('hidden', favorites.length + recents.length > 0)
-
-  renderAll()
+  setVisible(noResults, false)
+  setVisible(hint, favorites.length + recents.length === 0)
 }
 
-function renderAll() {
-  const visible = sortedCocktails.filter(matchesFilter)
+function renderSearch(q: string) {
+  const query = normalizeForSearch(q)
+  setVisible(searchClear, q.length > 0)
+  currentResults = []
+
+  if (!query) return renderSearchHome()
+
+  const matches = cocktails.filter(c =>
+    normalizeForSearch(c.name + ' ' + c.ingredients).includes(query)
+  )
+  currentResults = matches.slice(0, LIMITS.results)
+  fillList(resultsList, currentResults, q)
+
+  resultsHeader.textContent =
+    matches.length > currentResults.length
+      ? `Top ${currentResults.length} of ${matches.length}`
+      : matches.length === 1
+        ? '1 Drink'
+        : `${matches.length} Drinks`
+  noResultsBody.textContent = `Nothing matches “${q.trim()}”. Check the spelling or try an ingredient.`
+
+  setVisible(resultsSection, matches.length > 0)
+  setVisible(noResults, matches.length === 0)
+  setVisible(favoritesSection, false)
+  setVisible(recentsSection, false)
+  setVisible(hint, false)
+}
+
+function renderFavoritesTab() {
+  fillList(favoritesTabList, favorites.map(n => cocktailByName.get(n)!))
+  setVisible(favoritesTabList, favorites.length > 0)
+  setVisible(noFavorites, favorites.length === 0)
+}
+
+function renderAllTab() {
+  const items = activeSpirit
+    ? sortedCocktails.filter(c => spiritsByName.get(c.name)!.includes(activeSpirit!))
+    : sortedCocktails
+
   const groups = new Map<string, Cocktail[]>()
-  visible.forEach(c => {
+  for (const c of items) {
     const letter = indexLetter(c.name)
     groups.set(letter, [...(groups.get(letter) ?? []), c])
-  })
+  }
 
-  allGroups.innerHTML = ''
-  indexRail.innerHTML = ''
+  allGroups.replaceChildren(
+    ...[...groups].map(([letter, list]) => {
+      const section = document.createElement('section')
+      section.className = 'list-section'
+      section.innerHTML = `<div class="section-header letter" id="letter-${letter}">${escapeHTML(letter)}</div><ul class="list"></ul>`
+      fillList(section.querySelector('ul')!, list)
+      return section
+    })
+  )
+  indexRail.innerHTML = [...groups.keys()]
+    .map(l => `<span class="index-key" data-letter="${l}">${l}</span>`)
+    .join('')
 
-  groups.forEach((items, letter) => {
-    const title = document.createElement('div')
-    title.className = 'letter-title'
-    title.id = `letter-${letter}`
-    title.textContent = letter
-
-    const ul = document.createElement('ul')
-    ul.className = 'list'
-    items.forEach(c => ul.appendChild(renderRow(c, favorites.includes(c.name), true)))
-
-    allGroups.append(title, ul)
-
-    const key = document.createElement('span')
-    key.className = 'index-key'
-    key.dataset.letter = letter
-    key.textContent = letter
-    indexRail.appendChild(key)
-  })
-
-  allTitle.textContent = activeSpirit
-    ? `${activeSpirit} · ${visible.length}`
-    : `All Cocktails · ${visible.length}`
-
-  setVisible(allSection, true)
-  setVisible(allEmpty, visible.length === 0)
-  setVisible(indexRail, groups.size > 1)
+  const noun = items.length === 1 ? 'Cocktail' : 'Cocktails'
+  allCount.textContent = activeSpirit ? `${items.length} ${activeSpirit} ${noun}` : `${items.length} ${noun}`
+  setVisible(allCount, items.length > 0)
+  setVisible(allEmpty, items.length === 0)
+  setVisible(indexRail, activeTab === 'all' && groups.size > 1)
 }
 
 function jumpToLetter(letter: string) {
@@ -341,84 +459,123 @@ function jumpToLetter(letter: string) {
   haptic('light')
 }
 
-function renderSearch(q: string) {
-  const query = normalizeForSearch(q)
-  resultsList.innerHTML = ''
-  currentResults = []
+// Re-renders whichever tab is showing (e.g. after a favorite changes).
+function renderActiveTab() {
+  if (activeTab === 'search') renderSearch(searchInput.value)
+  else if (activeTab === 'favorites') renderFavoritesTab()
+  else renderAllTab()
+}
 
-  if (!query) return renderHome()
+/* ===================== Tabs + Large Title ===================== */
 
-  currentResults = cocktails
-    .filter(matchesFilter)
-    .filter(c => normalizeForSearch(c.name + ' ' + c.ingredients).includes(query))
-    .slice(0, LIMITS.results)
-
-  currentResults.forEach(c =>
-    resultsList.appendChild(renderRow(c, favorites.includes(c.name)))
-  )
-  if (currentResults.length === 0) {
-    resultsList.innerHTML = '<li class="empty-row">No matches</li>'
+function switchTab(tab: Tab) {
+  if (tab === activeTab) {
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    return
   }
-
-  setVisible(resultsSection, true)
-  setVisible(favoritesSection, false)
-  setVisible(recentsSection, false)
-  setVisible(allSection, false)
+  activeTab = tab
+  document.querySelectorAll<HTMLElement>('.view').forEach(v =>
+    setVisible(v, v.dataset.view === tab)
+  )
+  document.querySelectorAll<HTMLElement>('.tab').forEach(t =>
+    t.classList.toggle('is-active', t.dataset.tab === tab)
+  )
+  navbarTitle.textContent = TAB_TITLES[tab]
   setVisible(indexRail, false)
-  hint.classList.add('hidden')
+  window.scrollTo(0, 0)
+  renderActiveTab()
+  updateNavbar()
+}
+
+// iOS large titles: once the big title scrolls under the bar, the bar
+// turns frosted and shows a small centered title.
+function updateNavbar() {
+  const title = document.querySelector<HTMLElement>(`.view[data-view="${activeTab}"] .large-title`)
+  const collapsed = !!title && title.getBoundingClientRect().bottom < navbar.offsetHeight
+  navbar.classList.toggle('is-collapsed', collapsed)
 }
 
 /* ===================== Sheet ===================== */
+
+function renderSheetContent(c: Cocktail) {
+  const method = inferPrimaryMethod(c.instructions)
+  const ingredients = splitIngredients(c.ingredients)
+  const steps = splitSteps(c.instructions)
+
+  const tile = (icon: string, label: string, value: string) => `
+    <div class="info-tile">
+      <div class="info-icon">${icon}</div>
+      <div class="info-label">${label}</div>
+      <div class="info-value">${escapeHTML(value)}</div>
+    </div>`
+
+  sheetContent.innerHTML = `
+    <h2 class="sheet-title">${escapeHTML(c.name)}</h2>
+
+    <div class="info-grid">
+      ${tile(METHOD_ICON[method], 'Method', method)}
+      ${tile(icons.glass, 'Glass', c.glassware ?? '—')}
+      ${tile(icons.leaf, 'Garnish', c.garnish ?? '—')}
+    </div>
+
+    <div class="segmented spec-toggle" role="tablist">
+      <button type="button" class="segment ${isCompactMode ? '' : 'is-active'}" data-compact="0">Full Spec</button>
+      <button type="button" class="segment ${isCompactMode ? 'is-active' : ''}" data-compact="1">Quick Spec</button>
+    </div>
+
+    ${
+      isCompactMode
+        ? `<p class="quick-spec">${ingredients
+            .map(i => `<span>${i.amount ? `<b>${escapeHTML(i.amount)}</b> ` : ''}${escapeHTML(i.name)}</span>`)
+            .join(' <span class="dot">·</span> ')}</p>`
+        : `
+          <div class="section-header">Ingredients</div>
+          <ul class="list spec-list">
+            ${ingredients
+              .map(
+                i => `<li class="spec-row">
+                  <span class="spec-amount">${escapeHTML(i.amount)}</span>
+                  <span class="spec-name">${escapeHTML(capitalize(i.name))}</span>
+                </li>`
+              )
+              .join('')}
+          </ul>
+
+          <div class="section-header">Method</div>
+          <ol class="list steps">
+            ${steps.map(s => `<li class="step">${escapeHTML(s)}</li>`).join('')}
+          </ol>`
+    }
+  `
+
+  sheetContent.querySelectorAll<HTMLButtonElement>('.spec-toggle .segment').forEach(btn =>
+    btn.addEventListener('click', () => {
+      const compact = btn.dataset.compact === '1'
+      if (compact === isCompactMode) return
+      isCompactMode = compact
+      haptic('light')
+      renderSheetContent(c)
+    })
+  )
+}
+
+function updateFavButton() {
+  const isFav = !!activeCocktail && favorites.includes(activeCocktail.name)
+  favBtn.innerHTML = isFav ? icons.starFill : icons.star
+  favBtn.classList.toggle('is-on', isFav)
+  favBtn.setAttribute('aria-pressed', String(isFav))
+}
 
 function openSheet(c: Cocktail, compact = false) {
   activeCocktail = c
   isCompactMode = compact
   addRecent(c.name)
 
-  const ingredients = c.ingredients
-    .split(',')
-    .map(i => `<li>${escapeHTML(i.trim())}</li>`)
-    .join('')
+  renderSheetContent(c)
+  updateFavButton()
+  sheetContent.scrollTop = 0
 
-  const methodChip = inferPrimaryMethod(c.instructions)
-
-  sheetContent.innerHTML = `
-    <h2 class="sheet-title">${escapeHTML(c.name)}</h2>
-    <div class="chips">
-      <span class="chip chip-method">${methodChip}</span>
-      ${c.glassware ? `<span class="chip">Glass: ${escapeHTML(c.glassware)}</span>` : ''}
-      ${c.garnish ? `<span class="chip">Garnish: ${escapeHTML(c.garnish)}</span>` : ''}
-    </div>
-
-    <h3>Ingredients</h3>
-    ${
-      isCompactMode
-        ? `<p>${escapeHTML(renderCompactIngredients(c.ingredients))}</p>`
-        : `<ul class="ingredients">${ingredients}</ul>`
-    }
-
-    ${
-      isCompactMode
-        ? ''
-        : `<h3>Method</h3><p>${escapeHTML(c.instructions)}</p>`
-    }
-  `
-
-  favBtn.textContent = favorites.includes(c.name) ? '★' : '☆'
-
-  /* Long‑press title → toggle compact */
-  const title = sheetContent.querySelector('.sheet-title')!
-  let timer: number | null = null
-
-  title.addEventListener('pointerdown', () => {
-    timer = window.setTimeout(() => {
-      haptic('light')
-      openSheet(c, true)
-    }, 450)
-  })
-  title.addEventListener('pointerup', () => timer && clearTimeout(timer))
-  title.addEventListener('pointerleave', () => timer && clearTimeout(timer))
-
+  sheetOpenedAt = performance.now()
   searchInput.blur()
   document.body.classList.add('sheet-open')
   sheet.classList.add('is-open')
@@ -436,8 +593,7 @@ function closeSheet() {
   backdrop.classList.remove('is-open')
   document.body.classList.remove('sheet-open')
 
-  // Keep an active search on screen instead of dropping back to home
-  renderSearch(searchInput.value)
+  renderActiveTab()
 }
 
 /* ===================== Swipe-down-to-close Drag Handlers ===================== */
@@ -493,6 +649,7 @@ function onDragEnd(e?: PointerEvent) {
 function attachRowInteractions(list: HTMLElement) {
   let startX = 0
   let startY = 0
+  let moved = false
   let longPress: number | null = null
   let didLongPress = false
 
@@ -502,19 +659,27 @@ function attachRowInteractions(list: HTMLElement) {
 
     startX = e.clientX
     startY = e.clientY
+    moved = false
     didLongPress = false
 
     longPress = window.setTimeout(() => {
       didLongPress = true
+      haptic('light')
       openSheet(cocktailByName.get(row.dataset.name!)!, true)
     }, 450)
   })
 
   list.addEventListener('pointermove', e => {
     if (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10) {
+      moved = true
       if (longPress) clearTimeout(longPress)
       longPress = null
     }
+  })
+
+  list.addEventListener('pointercancel', () => {
+    if (longPress) clearTimeout(longPress)
+    longPress = null
   })
 
   list.addEventListener('pointerup', e => {
@@ -525,12 +690,18 @@ function attachRowInteractions(list: HTMLElement) {
 
     if (didLongPress) return
 
-    if (e.clientX - startX > 40) {
+    const dx = e.clientX - startX
+    const dy = Math.abs(e.clientY - startY)
+
+    if (dx > 40 && dx > dy) {
       toggleFavorite(row.dataset.name!)
       haptic('light')
-      renderSearch(searchInput.value)
+      renderActiveTab()
       return
     }
+
+    // A vertical scroll that ended on a row is not a tap.
+    if (moved) return
 
     openSheet(cocktailByName.get(row.dataset.name!)!)
   })
@@ -538,10 +709,34 @@ function attachRowInteractions(list: HTMLElement) {
 
 /* ===================== Events ===================== */
 
-attachRowInteractions(favoritesList)
-attachRowInteractions(recentsList)
-attachRowInteractions(resultsList)
-attachRowInteractions(allGroups)
+;[favoritesList, recentsList, resultsList, favoritesTabList, allGroups].forEach(attachRowInteractions)
+
+searchInput.addEventListener('input', () => renderSearch(searchInput.value))
+searchInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && currentResults[0]) openSheet(currentResults[0])
+})
+searchInput.addEventListener('focus', () => searchBar.classList.add('is-focused'))
+searchInput.addEventListener('blur', () => {
+  if (!searchInput.value) searchBar.classList.remove('is-focused')
+})
+
+searchClear.addEventListener('pointerdown', e => e.preventDefault()) // keep keyboard up
+searchClear.addEventListener('click', () => {
+  searchInput.value = ''
+  renderSearch('')
+  searchInput.focus()
+})
+
+searchCancel.addEventListener('click', () => {
+  searchInput.value = ''
+  searchBar.classList.remove('is-focused')
+  searchInput.blur()
+  renderSearch('')
+})
+
+document.querySelectorAll<HTMLButtonElement>('.tab').forEach(t =>
+  t.addEventListener('click', () => switchTab(t.dataset.tab as Tab))
+)
 
 filterBar.addEventListener('click', e => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.filter')
@@ -549,7 +744,7 @@ filterBar.addEventListener('click', e => {
   activeSpirit = (btn.dataset.spirit || null) as Spirit | null
   filterBar.querySelectorAll('.filter').forEach(f => f.classList.toggle('is-active', f === btn))
   haptic('light')
-  renderSearch(searchInput.value)
+  renderAllTab()
 })
 
 /* Letter index: tap or slide a finger down the rail, like Contacts */
@@ -572,30 +767,33 @@ indexRail.addEventListener('pointermove', e => {
   if (indexRail.hasPointerCapture(e.pointerId)) onRailPointer(e)
 })
 
-searchInput.addEventListener('input', () => renderSearch(searchInput.value))
-searchInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && currentResults[0]) openSheet(currentResults[0])
-})
-
 closeBtn.addEventListener('click', closeSheet)
-backdrop.addEventListener('click', closeSheet)
+// A tap opens the sheet on pointerup; the browser's follow-up click then
+// lands on the freshly shown backdrop. Ignore it so the sheet stays open.
+backdrop.addEventListener('click', () => {
+  if (performance.now() - sheetOpenedAt > 400) closeSheet()
+})
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && activeCocktail) closeSheet()
+})
 
 favBtn.addEventListener('click', () => {
   if (!activeCocktail) return
   toggleFavorite(activeCocktail.name)
   haptic('light')
-  favBtn.textContent = favorites.includes(activeCocktail.name) ? '★' : '☆'
+  updateFavButton()
 })
+
+window.addEventListener('scroll', updateNavbar, { passive: true })
 
 /* ===================== Attach Swipe-down Drag Handlers ===================== */
 
-const sheetHandle = document.querySelector<HTMLElement>('.sheet-handle')!
-const sheetTop = document.querySelector<HTMLElement>('.sheet-top')!
-
-sheetHandle.addEventListener('pointerdown', onDragStart)
-sheetTop.addEventListener('pointerdown', onDragStart)
+$<HTMLElement>('.sheet-handle').addEventListener('pointerdown', onDragStart)
+$<HTMLElement>('.sheet-top').addEventListener('pointerdown', onDragStart)
 
 /* ===================== Init ===================== */
 
-renderHome()
+navbarTitle.textContent = TAB_TITLES[activeTab]
+renderSearchHome()
+updateNavbar()
 // Do NOT auto-focus search on load (prevents keyboard hijacking)
