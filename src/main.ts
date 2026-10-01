@@ -67,6 +67,28 @@ function haptic(type: 'light' | 'medium' = 'light') {
   navigator.vibrate(pattern)
 }
 
+/* ===================== Spirit Filters ===================== */
+
+const SPIRITS = [
+  { label: 'Gin', pattern: /\bgin\b/ },
+  { label: 'Whisky', pattern: /bourbon|\brye\b|scotch|whisk|lot 40/ },
+  { label: 'Agave', pattern: /tequila|mezcal/ },
+  { label: 'Rum', pattern: /\brum\b/ },
+  { label: 'Brandy', pattern: /cognac|(?<!apricot )brandy/ },
+  { label: 'Vodka', pattern: /vodka/ },
+  { label: 'Bubbles', pattern: /prosecco|champagne|sparkling/, includeMethod: true },
+] as const
+
+type Spirit = (typeof SPIRITS)[number]['label']
+
+function spiritsOf(c: Cocktail): Spirit[] {
+  const ingredients = c.ingredients.toLowerCase()
+  const all = `${ingredients} ${c.instructions.toLowerCase()}`
+  return SPIRITS.filter(s =>
+    s.pattern.test('includeMethod' in s ? all : ingredients)
+  ).map(s => s.label)
+}
+
 /* ===================== Spec Card Helpers ===================== */
 
 
@@ -82,6 +104,18 @@ function renderCompactIngredients(ingredients: string): string {
 
 const cocktailByName = new Map<string, Cocktail>(cocktails.map(c => [c.name, c]))
 const allNames = new Set(cocktails.map(c => c.name))
+
+const spiritsByName = new Map<string, Spirit[]>(cocktails.map(c => [c.name, spiritsOf(c)]))
+
+// A–Z menu, case-insensitive (so "SAZERAC" sorts with the S's)
+const sortedCocktails = [...cocktails].sort((a, b) =>
+  a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+)
+
+function indexLetter(name: string): string {
+  const first = normalizeForSearch(name).charAt(0).toUpperCase()
+  return /[A-Z]/.test(first) ? first : '#'
+}
 
 let favorites = loadNameList(STORAGE_KEYS.favorites).filter(n => allNames.has(n))
 let recents = loadNameList(STORAGE_KEYS.recents).filter(n => allNames.has(n))
@@ -117,6 +151,11 @@ app.innerHTML = `
     <input type="search" class="search" placeholder="Search cocktails or ingredients…" />
   </div>
 
+  <div class="filters" role="toolbar" aria-label="Filter by spirit">
+    <button class="filter is-active" data-spirit="">All</button>
+    ${SPIRITS.map(s => `<button class="filter" data-spirit="${s.label}">${s.label}</button>`).join('')}
+  </div>
+
   <section class="list-section" id="favoritesSection">
     <div class="section-title">Favorites</div>
     <ul class="list" id="favoritesList"></ul>
@@ -133,7 +172,16 @@ app.innerHTML = `
   </section>
 
   <p class="hint" id="hint">Tip: try “mezcal”, “chartreuse”, or “rye”.</p>
+
+  <section class="list-section" id="allSection">
+    <div class="section-title" id="allTitle">All Cocktails</div>
+    <div id="allGroups"></div>
+    <p class="empty-row hidden" id="allEmpty">No cocktails match this filter.</p>
+  </section>
+
 </main>
+
+<nav class="index-rail" aria-label="Jump to letter"></nav>
 
 <div class="sheet-backdrop"></div>
 <section class="sheet">
@@ -156,6 +204,14 @@ const favoritesSection = document.querySelector<HTMLElement>('#favoritesSection'
 const recentsSection = document.querySelector<HTMLElement>('#recentsSection')!
 const resultsSection = document.querySelector<HTMLElement>('#resultsSection')!
 const hint = document.querySelector<HTMLElement>('#hint')!
+const allSection = document.querySelector<HTMLElement>('#allSection')!
+const allTitle = document.querySelector<HTMLElement>('#allTitle')!
+const allGroups = document.querySelector<HTMLElement>('#allGroups')!
+const allEmpty = document.querySelector<HTMLElement>('#allEmpty')!
+const filterBar = document.querySelector<HTMLElement>('.filters')!
+const indexRail = document.querySelector<HTMLElement>('.index-rail')!
+// #app's backdrop-filter traps position:fixed children, so pin the rail to the viewport via <body>
+document.body.appendChild(indexRail)
 
 const sheet = document.querySelector<HTMLElement>('.sheet')!
 const sheetContent = document.querySelector<HTMLElement>('.sheet-content')!
@@ -168,6 +224,11 @@ const favBtn = document.querySelector<HTMLButtonElement>('.sheet-action-fav')!
 let activeCocktail: Cocktail | null = null
 let isCompactMode = false
 let currentResults: Cocktail[] = []
+let activeSpirit: Spirit | null = null
+
+function matchesFilter(c: Cocktail) {
+  return !activeSpirit || spiritsByName.get(c.name)!.includes(activeSpirit)
+}
 
 // Drag state variables for swipe-down-to-close gesture
 let dragStartY = 0
@@ -197,14 +258,17 @@ function setVisible(el: HTMLElement, show: boolean) {
   el.classList.toggle('hidden', !show)
 }
 
-function renderRow(c: Cocktail, showStar = false) {
+function renderRow(c: Cocktail, showStar = false, showDetail = false) {
   const li = document.createElement('li')
   li.className = 'row'
   li.dataset.name = c.name
 
+  const detail = [inferPrimaryMethod(c.instructions), c.glassware].filter(Boolean).join(' · ')
+
   li.innerHTML = `
     <div class="row-text">
       <div class="row-title">${escapeHTML(c.name)}</div>
+      ${showDetail ? `<div class="row-subtitle">${escapeHTML(detail)}</div>` : ''}
     </div>
     <div class="row-right">
       ${showStar ? '<span class="row-star">★</span>' : ''}
@@ -227,6 +291,54 @@ function renderHome() {
   setVisible(resultsSection, false)
 
   hint.classList.toggle('hidden', favorites.length + recents.length > 0)
+
+  renderAll()
+}
+
+function renderAll() {
+  const visible = sortedCocktails.filter(matchesFilter)
+  const groups = new Map<string, Cocktail[]>()
+  visible.forEach(c => {
+    const letter = indexLetter(c.name)
+    groups.set(letter, [...(groups.get(letter) ?? []), c])
+  })
+
+  allGroups.innerHTML = ''
+  indexRail.innerHTML = ''
+
+  groups.forEach((items, letter) => {
+    const title = document.createElement('div')
+    title.className = 'letter-title'
+    title.id = `letter-${letter}`
+    title.textContent = letter
+
+    const ul = document.createElement('ul')
+    ul.className = 'list'
+    items.forEach(c => ul.appendChild(renderRow(c, favorites.includes(c.name), true)))
+
+    allGroups.append(title, ul)
+
+    const key = document.createElement('span')
+    key.className = 'index-key'
+    key.dataset.letter = letter
+    key.textContent = letter
+    indexRail.appendChild(key)
+  })
+
+  allTitle.textContent = activeSpirit
+    ? `${activeSpirit} · ${visible.length}`
+    : `All Cocktails · ${visible.length}`
+
+  setVisible(allSection, true)
+  setVisible(allEmpty, visible.length === 0)
+  setVisible(indexRail, groups.size > 1)
+}
+
+function jumpToLetter(letter: string) {
+  const target = document.getElementById(`letter-${letter}`)
+  if (!target) return
+  target.scrollIntoView({ block: 'start' })
+  haptic('light')
 }
 
 function renderSearch(q: string) {
@@ -237,16 +349,22 @@ function renderSearch(q: string) {
   if (!query) return renderHome()
 
   currentResults = cocktails
+    .filter(matchesFilter)
     .filter(c => normalizeForSearch(c.name + ' ' + c.ingredients).includes(query))
     .slice(0, LIMITS.results)
 
   currentResults.forEach(c =>
     resultsList.appendChild(renderRow(c, favorites.includes(c.name)))
   )
+  if (currentResults.length === 0) {
+    resultsList.innerHTML = '<li class="empty-row">No matches</li>'
+  }
 
   setVisible(resultsSection, true)
   setVisible(favoritesSection, false)
   setVisible(recentsSection, false)
+  setVisible(allSection, false)
+  setVisible(indexRail, false)
   hint.classList.add('hidden')
 }
 
@@ -318,7 +436,8 @@ function closeSheet() {
   backdrop.classList.remove('is-open')
   document.body.classList.remove('sheet-open')
 
-  renderHome()
+  // Keep an active search on screen instead of dropping back to home
+  renderSearch(searchInput.value)
 }
 
 /* ===================== Swipe-down-to-close Drag Handlers ===================== */
@@ -409,7 +528,7 @@ function attachRowInteractions(list: HTMLElement) {
     if (e.clientX - startX > 40) {
       toggleFavorite(row.dataset.name!)
       haptic('light')
-      renderHome()
+      renderSearch(searchInput.value)
       return
     }
 
@@ -422,6 +541,36 @@ function attachRowInteractions(list: HTMLElement) {
 attachRowInteractions(favoritesList)
 attachRowInteractions(recentsList)
 attachRowInteractions(resultsList)
+attachRowInteractions(allGroups)
+
+filterBar.addEventListener('click', e => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.filter')
+  if (!btn) return
+  activeSpirit = (btn.dataset.spirit || null) as Spirit | null
+  filterBar.querySelectorAll('.filter').forEach(f => f.classList.toggle('is-active', f === btn))
+  haptic('light')
+  renderSearch(searchInput.value)
+})
+
+/* Letter index: tap or slide a finger down the rail, like Contacts */
+let railLetter = ''
+function onRailPointer(e: PointerEvent) {
+  const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
+  const letter = el?.closest<HTMLElement>('.index-key')?.dataset.letter
+  if (!letter || letter === railLetter) return
+  railLetter = letter
+  jumpToLetter(letter)
+}
+indexRail.addEventListener('pointerdown', e => {
+  railLetter = ''
+  try {
+    indexRail.setPointerCapture(e.pointerId)
+  } catch {}
+  onRailPointer(e)
+})
+indexRail.addEventListener('pointermove', e => {
+  if (indexRail.hasPointerCapture(e.pointerId)) onRailPointer(e)
+})
 
 searchInput.addEventListener('input', () => renderSearch(searchInput.value))
 searchInput.addEventListener('keydown', e => {
@@ -436,7 +585,6 @@ favBtn.addEventListener('click', () => {
   toggleFavorite(activeCocktail.name)
   haptic('light')
   favBtn.textContent = favorites.includes(activeCocktail.name) ? '★' : '☆'
-  renderHome()
 })
 
 /* ===================== Attach Swipe-down Drag Handlers ===================== */
