@@ -1,27 +1,31 @@
 :root {
-  color-scheme: light dark;
+  /* The Ace runs dark all the time: true black for a dim bar, warm
+     near-black surfaces, and a brass accent in place of iOS blue. */
+  color-scheme: dark;
 
-  /* iOS system colors (light) */
-  --text: #000;
-  --secondary: rgba(60, 60, 67, 0.6);
-  --tertiary: rgba(60, 60, 67, 0.3);
-  --placeholder: rgba(60, 60, 67, 0.6);
-  --tint: #007aff;
-  --tint-soft: rgba(0, 122, 255, 0.12);
-  --star: #ff9f0a;
+  --text: #f5f1ea;
+  --secondary: rgba(235, 228, 216, 0.6);
+  --tertiary: rgba(235, 228, 216, 0.3);
+  --placeholder: rgba(235, 228, 216, 0.45);
+  --tint: #e0a943;
+  --tint-strong: #f0bd5c;
+  --tint-soft: rgba(224, 169, 67, 0.16);
+  --on-tint: #1a1206;
+  --star: #e0a943;
 
   /* Surfaces & separators */
-  --bg-tint: rgba(242, 242, 247, 0.82);
-  --separator: rgba(60, 60, 67, 0.18);
-  --row-active: rgba(0, 0, 0, 0.06);
-  --card: rgba(255, 255, 255, 0.86);
-  --sheet: rgba(242, 242, 247, 0.94);
-  --sheet-card: #fff;
-  --bar: rgba(249, 249, 249, 0.78);
-  --field-bg: rgba(118, 118, 128, 0.12);
-  --segment-bg: rgba(118, 118, 128, 0.12);
-  --segment-on: #fff;
-  --circle-btn: rgba(118, 118, 128, 0.12);
+  --bg: #000;
+  --glow: rgba(224, 169, 67, 0.09);
+  --separator: rgba(235, 220, 195, 0.12);
+  --row-active: rgba(224, 169, 67, 0.1);
+  --card: #141311;
+  --sheet: rgba(14, 13, 12, 0.97);
+  --sheet-card: #1c1a17;
+  --bar: rgba(10, 9, 8, 0.78);
+  --field-bg: rgba(235, 220, 195, 0.09);
+  --segment-bg: rgba(235, 220, 195, 0.08);
+  --segment-on: #3a352d;
+  --circle-btn: rgba(235, 220, 195, 0.1);
 
   /* Geometry */
   --radius: 12px;
@@ -31,41 +35,15 @@
   --navbar-h: 44px;
 
   /* Elevation */
-  --shadow: 0 -8px 40px rgba(0, 0, 0, 0.18);
+  --shadow: 0 -8px 40px rgba(0, 0, 0, 0.6);
 
   /* Accents */
-  --mark-bg: rgba(255, 204, 0, 0.35);
+  --mark-bg: rgba(224, 169, 67, 0.28);
 
   /* Motion */
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
-  --fast: 160ms;
-  --med: 380ms;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #fff;
-    --secondary: rgba(235, 235, 245, 0.6);
-    --tertiary: rgba(235, 235, 245, 0.3);
-    --placeholder: rgba(235, 235, 245, 0.6);
-    --tint: #0a84ff;
-    --tint-soft: rgba(10, 132, 255, 0.2);
-    --star: #ffd60a;
-
-    --bg-tint: rgba(0, 0, 0, 0.84);
-    --separator: rgba(84, 84, 88, 0.65);
-    --row-active: rgba(255, 255, 255, 0.08);
-    --card: rgba(28, 28, 30, 0.88);
-    --sheet: rgba(28, 28, 30, 0.96);
-    --sheet-card: #2c2c2e;
-    --bar: rgba(22, 22, 23, 0.78);
-    --field-bg: rgba(118, 118, 128, 0.24);
-    --segment-bg: rgba(118, 118, 128, 0.24);
-    --segment-on: #636366;
-    --circle-btn: rgba(118, 118, 128, 0.24);
-
-    --mark-bg: rgba(255, 214, 10, 0.3);
-  }
+  --fast: 140ms;
+  --med: 300ms;
 }
 
 * {
@@ -83,9 +61,16 @@ body {
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
 
-  background: #000 url('/assets/acewallpapercomp.jpeg') no-repeat center center fixed;
-  background-size: cover;
+  background: var(--bg);
   color: var(--text);
+}
+
+::selection {
+  background: rgba(224, 169, 67, 0.4);
+}
+
+input {
+  caret-color: var(--tint);
 }
 
 button {
@@ -106,17 +91,15 @@ button {
   flex-shrink: 0;
 }
 
-/* The wallpaper stays as a faint brand texture behind the system background.
-   The blur lives on a separate fixed layer: backdrop-filter on #app itself
-   would trap the fixed tab bar and sheet inside #app's box. */
+/* A faint brass glow at the top of the screen, like bar lighting.
+   Fixed so it stays put while lists scroll. */
 body::before {
   content: '';
   position: fixed;
-  inset: 0;
+  inset: 0 0 auto;
+  height: 360px;
   z-index: 0;
-  background: var(--bg-tint);
-  backdrop-filter: saturate(160%) blur(24px);
-  -webkit-backdrop-filter: saturate(160%) blur(24px);
+  background: radial-gradient(120% 100% at 50% 0%, var(--glow), transparent 70%);
   pointer-events: none;
 }
 
@@ -184,10 +167,9 @@ body::before {
   margin: 2px 0 6px;
 }
 
-@media (prefers-color-scheme: dark) {
-  .logo {
-    filter: invert(1);
-  }
+.logo {
+  /* the logo file is black; show it in warm off-white */
+  filter: invert(0.94) sepia(0.15);
 }
 
 .large-title {
@@ -466,7 +448,7 @@ body::before {
 .segment.is-active {
   background: var(--segment-on);
   font-weight: 600;
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.12), 0 3px 1px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4), inset 0 0.5px 0 rgba(255, 240, 210, 0.12);
 }
 
 /* ===================== Tab bar ===================== */
@@ -499,7 +481,7 @@ body::before {
   align-items: center;
   justify-content: center;
   gap: 3px;
-  color: #999;
+  color: rgba(235, 228, 216, 0.45);
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.1px;
@@ -642,8 +624,17 @@ body.sheet-open {
   touch-action: pan-y;
 }
 
+.sheet-eyebrow {
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--tint);
+}
+
 .sheet-title {
-  margin: 4px 0 16px;
+  margin: 2px 0 16px;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', sans-serif;
   font-size: 28px;
   font-weight: 700;
@@ -776,6 +767,81 @@ body.sheet-open {
   margin: 0 8px;
 }
 
+/* ===================== Previous / next drink ===================== */
+
+.sheet-nav {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px var(--gutter) calc(10px + env(safe-area-inset-bottom));
+  border-top: 0.5px solid var(--separator);
+  background: var(--sheet);
+}
+
+.sheet-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 12px;
+  background: var(--sheet-card);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.24px;
+  transition: transform 90ms ease, background var(--fast) linear;
+}
+
+.sheet-nav-btn.next {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.sheet-nav-btn:active {
+  transform: scale(0.97);
+  background: var(--segment-on);
+}
+
+.sheet-nav-btn:disabled {
+  visibility: hidden;
+}
+
+.nav-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-chev {
+  color: var(--tint);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.nav-chev.flip .icon {
+  transform: scaleX(-1);
+}
+
+.sheet-content.slide-next {
+  animation: slide-in-next 220ms var(--ease);
+}
+
+.sheet-content.slide-prev {
+  animation: slide-in-prev 220ms var(--ease);
+}
+
+@keyframes slide-in-next {
+  from { opacity: 0; transform: translateX(28px); }
+}
+
+@keyframes slide-in-prev {
+  from { opacity: 0; transform: translateX(-28px); }
+}
+
 /* ===================== Accessibility ===================== */
 
 button:focus-visible {
@@ -786,6 +852,7 @@ button:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;
+    animation: none !important;
   }
 }
 
@@ -825,7 +892,8 @@ button:focus-visible {
 
 .filter.is-active {
   background: var(--tint);
-  color: #fff;
+  color: var(--on-tint);
+  font-weight: 600;
 }
 
 /* clears the navigation bar when jumping from the index rail */
