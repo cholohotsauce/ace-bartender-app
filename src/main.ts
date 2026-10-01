@@ -9,7 +9,7 @@ const STORAGE_KEYS = {
   recents: 'ace-bartender-app:recents:v1',
 } as const
 
-const LIMITS = { results: 8, recents: 8 } as const
+const LIMITS = { recents: 8 } as const
 
 function loadNameList(key: string): string[] {
   try {
@@ -233,7 +233,7 @@ app.innerHTML = `
       <div class="empty-body" id="noResultsBody"></div>
     </div>
 
-    <p class="footnote" id="hint">Try “mezcal”, “chartreuse”, or “rye”. Swipe a row right to favorite it, or press and hold for the quick spec.</p>
+    <p class="footnote" id="hint">Try “mezcal”, “chartreuse”, or “rye”. Swipe a row right to favorite it, or press and hold for the quick spec. Inside a drink, swipe sideways to go to the next one.</p>
   </section>
 
   <section class="view hidden" data-view="favorites">
@@ -278,6 +278,10 @@ app.innerHTML = `
     <button type="button" class="circle-btn sheet-action-close" aria-label="Close">${icons.xmark}</button>
   </div>
   <div class="sheet-content"></div>
+  <nav class="sheet-nav" aria-label="Other drinks">
+    <button type="button" class="sheet-nav-btn prev"></button>
+    <button type="button" class="sheet-nav-btn next"></button>
+  </nav>
 </section>
 `
 
@@ -314,6 +318,9 @@ const sheetContent = $<HTMLElement>('.sheet-content')
 const backdrop = $<HTMLElement>('.sheet-backdrop')
 const closeBtn = $<HTMLButtonElement>('.sheet-action-close')
 const favBtn = $<HTMLButtonElement>('.sheet-action-fav')
+const sheetNav = $<HTMLElement>('.sheet-nav')
+const prevBtn = $<HTMLButtonElement>('.sheet-nav-btn.prev')
+const nextBtn = $<HTMLButtonElement>('.sheet-nav-btn.next')
 
 /* ===================== State ===================== */
 
@@ -323,6 +330,9 @@ let isCompactMode = false
 let currentResults: Cocktail[] = []
 let activeSpirit: Spirit | null = null
 let sheetOpenedAt = 0
+// The list the open drink came from, so the sheet can step to the next one.
+let sheetList: Cocktail[] = []
+let sheetFromSearch = false
 
 // Drag state variables for swipe-down-to-close gesture
 let dragStartY = 0
@@ -387,6 +397,20 @@ function renderSearchHome() {
   setVisible(hint, favorites.length + recents.length === 0)
 }
 
+// Lower is better: drinks whose name starts with the query, then a word in
+// the name, then anywhere in the name, then ingredients.
+// "El " is skipped so "vuelve" ranks El Vuelve a la Vida first.
+function searchRank(c: Cocktail, query: string): number {
+  const name = normalizeForSearch(c.name)
+  const bare = name.replace(/^el /, '')
+  if (name.startsWith(query) || bare.startsWith(query)) return 0
+  if ((' ' + name).includes(' ' + query)) return 1
+  if (name.includes(query)) return 2
+  // Ingredients match from the start of a word, so "neg" doesn't find vinegar.
+  if ((' ' + normalizeForSearch(c.ingredients)).includes(' ' + query)) return 3
+  return -1
+}
+
 function renderSearch(q: string) {
   const query = normalizeForSearch(q)
   setVisible(searchClear, q.length > 0)
@@ -394,18 +418,15 @@ function renderSearch(q: string) {
 
   if (!query) return renderSearchHome()
 
-  const matches = cocktails.filter(c =>
-    normalizeForSearch(c.name + ' ' + c.ingredients).includes(query)
-  )
-  currentResults = matches.slice(0, LIMITS.results)
+  const matches = cocktails
+    .map(c => ({ c, rank: searchRank(c, query) }))
+    .filter(m => m.rank >= 0)
+    .sort((a, b) => a.rank - b.rank || a.c.name.localeCompare(b.c.name))
+    .map(m => m.c)
+  currentResults = matches
   fillList(resultsList, currentResults, q)
 
-  resultsHeader.textContent =
-    matches.length > currentResults.length
-      ? `Top ${currentResults.length} of ${matches.length}`
-      : matches.length === 1
-        ? '1 Drink'
-        : `${matches.length} Drinks`
+  resultsHeader.textContent = matches.length === 1 ? '1 Drink' : `${matches.length} Drinks`
   noResultsBody.textContent = `Nothing matches “${q.trim()}”. Check the spelling or try an ingredient.`
 
   setVisible(resultsSection, matches.length > 0)
@@ -471,6 +492,8 @@ function renderActiveTab() {
 function switchTab(tab: Tab) {
   if (tab === activeTab) {
     window.scrollTo({ top: 0, behavior: 'smooth' })
+    // Tapping Search again puts the cursor in the field, like the App Store.
+    if (tab === 'search') searchInput.focus({ preventScroll: true })
     return
   }
   activeTab = tab
@@ -501,6 +524,7 @@ function renderSheetContent(c: Cocktail) {
   const method = inferPrimaryMethod(c.instructions)
   const ingredients = splitIngredients(c.ingredients)
   const steps = splitSteps(c.instructions)
+  const spirits = spiritsByName.get(c.name) ?? []
 
   const tile = (icon: string, label: string, value: string) => `
     <div class="info-tile">
@@ -510,6 +534,7 @@ function renderSheetContent(c: Cocktail) {
     </div>`
 
   sheetContent.innerHTML = `
+    ${spirits.length ? `<div class="sheet-eyebrow">${escapeHTML(spirits.join(' · '))}</div>` : ''}
     <h2 class="sheet-title">${escapeHTML(c.name)}</h2>
 
     <div class="info-grid">
@@ -566,14 +591,50 @@ function updateFavButton() {
   favBtn.setAttribute('aria-pressed', String(isFav))
 }
 
-function openSheet(c: Cocktail, compact = false) {
-  activeCocktail = c
-  isCompactMode = compact
-  addRecent(c.name)
+function updateSheetNav() {
+  const at = activeCocktail ? sheetList.indexOf(activeCocktail) : -1
+  const prev = at > 0 ? sheetList[at - 1] : null
+  const next = at >= 0 && at < sheetList.length - 1 ? sheetList[at + 1] : null
+  const label = (c: Cocktail | null, dir: 'prev' | 'next') =>
+    c
+      ? dir === 'prev'
+        ? `<span class="nav-chev flip">${icons.chevron}</span><span class="nav-name">${escapeHTML(c.name)}</span>`
+        : `<span class="nav-name">${escapeHTML(c.name)}</span><span class="nav-chev">${icons.chevron}</span>`
+      : ''
+  prevBtn.innerHTML = label(prev, 'prev')
+  nextBtn.innerHTML = label(next, 'next')
+  prevBtn.disabled = !prev
+  nextBtn.disabled = !next
+  setVisible(sheetNav, sheetList.length > 1)
+}
 
+function showInSheet(c: Cocktail, direction: 'prev' | 'next' | null = null) {
+  activeCocktail = c
+  addRecent(c.name)
   renderSheetContent(c)
   updateFavButton()
+  updateSheetNav()
   sheetContent.scrollTop = 0
+  if (direction) {
+    sheetContent.classList.remove('slide-prev', 'slide-next')
+    void sheetContent.offsetWidth // restart the animation
+    sheetContent.classList.add(`slide-${direction}`)
+  }
+}
+
+function stepSheet(delta: 1 | -1) {
+  if (!activeCocktail) return
+  const target = sheetList[sheetList.indexOf(activeCocktail) + delta]
+  if (!target) return
+  haptic('light')
+  showInSheet(target, delta === 1 ? 'next' : 'prev')
+}
+
+function openSheet(c: Cocktail, compact = false, list: Cocktail[] = []) {
+  isCompactMode = compact
+  sheetList = list.includes(c) ? list : [c]
+  sheetFromSearch = activeTab === 'search'
+  showInSheet(c)
 
   sheetOpenedAt = performance.now()
   searchInput.blur()
@@ -594,6 +655,14 @@ function closeSheet() {
   document.body.classList.remove('sheet-open')
 
   renderActiveTab()
+
+  // Looking something up is usually followed by looking up the next drink,
+  // so go straight back to the search field, ready to type over.
+  if (sheetFromSearch) {
+    searchInput.focus({ preventScroll: true })
+    searchInput.select()
+    window.scrollTo(0, 0)
+  }
 }
 
 /* ===================== Swipe-down-to-close Drag Handlers ===================== */
@@ -665,7 +734,7 @@ function attachRowInteractions(list: HTMLElement) {
     longPress = window.setTimeout(() => {
       didLongPress = true
       haptic('light')
-      openSheet(cocktailByName.get(row.dataset.name!)!, true)
+      openSheet(cocktailByName.get(row.dataset.name!)!, true, listOrder(list))
     }, 450)
   })
 
@@ -703,8 +772,35 @@ function attachRowInteractions(list: HTMLElement) {
     // A vertical scroll that ended on a row is not a tap.
     if (moved) return
 
-    openSheet(cocktailByName.get(row.dataset.name!)!)
+    openSheet(cocktailByName.get(row.dataset.name!)!, false, listOrder(list))
   })
+}
+
+// Drinks in the order they're shown in a list (or all lists in a container).
+function listOrder(container: HTMLElement): Cocktail[] {
+  return [...container.querySelectorAll<HTMLElement>('.row')].map(
+    r => cocktailByName.get(r.dataset.name!)!
+  )
+}
+
+/* Swipe sideways on the drink card to step through the list it came from. */
+function attachSheetSwipe() {
+  let x0 = 0
+  let y0 = 0
+  let id: number | null = null
+  sheetContent.addEventListener('pointerdown', e => {
+    id = e.pointerId
+    x0 = e.clientX
+    y0 = e.clientY
+  })
+  sheetContent.addEventListener('pointerup', e => {
+    if (e.pointerId !== id) return
+    id = null
+    const dx = e.clientX - x0
+    const dy = e.clientY - y0
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) stepSheet(dx < 0 ? 1 : -1)
+  })
+  sheetContent.addEventListener('pointercancel', () => (id = null))
 }
 
 /* ===================== Events ===================== */
@@ -713,7 +809,7 @@ function attachRowInteractions(list: HTMLElement) {
 
 searchInput.addEventListener('input', () => renderSearch(searchInput.value))
 searchInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && currentResults[0]) openSheet(currentResults[0])
+  if (e.key === 'Enter' && currentResults[0]) openSheet(currentResults[0], false, currentResults)
 })
 searchInput.addEventListener('focus', () => searchBar.classList.add('is-focused'))
 searchInput.addEventListener('blur', () => {
@@ -774,8 +870,15 @@ backdrop.addEventListener('click', () => {
   if (performance.now() - sheetOpenedAt > 400) closeSheet()
 })
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && activeCocktail) closeSheet()
+  if (!activeCocktail) return
+  if (e.key === 'Escape') closeSheet()
+  else if (e.key === 'ArrowRight') stepSheet(1)
+  else if (e.key === 'ArrowLeft') stepSheet(-1)
 })
+
+prevBtn.addEventListener('click', () => stepSheet(-1))
+nextBtn.addEventListener('click', () => stepSheet(1))
+attachSheetSwipe()
 
 favBtn.addEventListener('click', () => {
   if (!activeCocktail) return
